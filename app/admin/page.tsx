@@ -21,6 +21,9 @@ export default function AdminPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<"dashboard" | "editors" | "uploads" | "archive" | "logs" | "schedule">("dashboard")
 
+  // Read optional public logo URL from environment (hosted image)
+  const logoUrl = process.env.NEXT_PUBLIC_ADMIN_LOGO_URL || process.env.NEXT_PUBLIC_SITE_LOGO_URL || ""
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
@@ -51,6 +54,11 @@ export default function AdminPage() {
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
           <CardContent className="p-8">
+            {logoUrl ? (
+              <div className="flex justify-center mb-4">
+                <img src={logoUrl} alt="Admin logo" className="h-16 w-auto rounded-md shadow-sm" />
+              </div>
+            ) : null}
             <h1 className="text-2xl font-bold text-gray-900 mb-2">Admin Dashboard</h1>
             <p className="text-gray-600 mb-6">Enter your password to access the dashboard</p>
 
@@ -95,9 +103,14 @@ export default function AdminPage() {
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
-            <p className="text-gray-600 mt-1">Manage editors and view upload statistics</p>
+          <div className="flex items-center gap-4">
+            {logoUrl ? (
+              <img src={logoUrl} alt="Admin logo" className="h-12 w-auto rounded-md shadow-sm" />
+            ) : null}
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
+              <p className="text-gray-600 mt-1">Manage editors and view upload statistics</p>
+            </div>
           </div>
           <Button variant="outline" onClick={() => setIsAuthenticated(false)}>
             Logout
