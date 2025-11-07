@@ -11,7 +11,16 @@ export async function GET(request: NextRequest) {
     const editorMap: Record<string, any> = {}
     editors.forEach((e: any) => (editorMap[e.id] = e))
 
-    const mapped = logs.map((l: any) => ({ ...l, editors: editorMap[l.editor_id] ? { name: editorMap[l.editor_id].name, type: editorMap[l.editor_id].type } : null }))
+    // Ensure each log has a stable `id` string property (clients expect `id`).
+    const mapped = logs.map((l: any) => {
+      const id = l.id ?? (l._id ? String(l._id) : undefined)
+      return {
+        ...l,
+        id,
+        editors: editorMap[l.editor_id] ? { name: editorMap[l.editor_id].name, type: editorMap[l.editor_id].type } : null,
+      }
+    })
+
     return NextResponse.json(mapped)
   } catch (error) {
     console.error("Error fetching logs:", error)
@@ -23,13 +32,15 @@ export async function DELETE(request: NextRequest) {
   try {
     const { logIds } = await request.json()
 
-    if (!logIds || !Array.isArray(logIds) || logIds.length === 0) return NextResponse.json({ error: "Invalid log IDs" }, { status: 400 })
+    // sanitize input: only accept non-empty string IDs
+    const cleanIds = Array.isArray(logIds) ? logIds.filter((id: any) => !!id && typeof id === 'string') : []
+    if (!cleanIds || cleanIds.length === 0) return NextResponse.json({ error: "Invalid or empty log IDs" }, { status: 400 })
 
     const db = await getDb()
     // attempt delete by ObjectId where possible, fallback to id field
     const objectIds = []
     const stringIds = []
-    for (const id of logIds) {
+    for (const id of cleanIds) {
       try {
         objectIds.push(new ObjectId(id))
       } catch (e) {

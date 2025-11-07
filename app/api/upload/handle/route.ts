@@ -18,6 +18,27 @@ export async function POST(request: Request) {
   const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 
   try {
+    // Early configuration check: fail fast if Cloudinary isn't configured in the deployment
+    const hasCloudName = Boolean(process.env.CLOUDINARY_CLOUD_NAME)
+    const hasKeySecret = Boolean(process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)
+    const hasUnsigned = Boolean(process.env.CLOUDINARY_UPLOAD_PRESET)
+    if (!hasCloudName || (!hasKeySecret && !hasUnsigned)) {
+      console.error(`[v0] [${requestId}] Cloudinary storage not configured (missing env vars)`)
+      return NextResponse.json({ error: "Server upload not configured. Missing Cloudinary environment variables." }, { status: 500 })
+    }
+
+    // Quick Content-Length check to avoid reading large bodies in serverless environments
+    // Vercel and other serverless platforms often have strict request body limits. Reject early with a clear message.
+    const contentLengthHeader = request.headers.get("content-length")
+    if (contentLengthHeader) {
+      const contentLength = Number(contentLengthHeader)
+      const MAX_ACCEPTED_BYTES = 5 * 1024 * 1024 // 5MB — conservative server-side limit; prefer direct-to-storage for larger files
+      if (!Number.isNaN(contentLength) && contentLength > MAX_ACCEPTED_BYTES) {
+        console.error(`[v0] [${requestId}] Rejecting upload: content-length ${contentLength} exceeds ${MAX_ACCEPTED_BYTES}`)
+        return NextResponse.json({ error: `File too large for server upload (> ${Math.round(MAX_ACCEPTED_BYTES / 1024 / 1024)}MB). Please upload directly to blob/storage.` }, { status: 413 })
+      }
+    }
+
     // Expect multipart/form-data with 'file' and 'clientPayload'
     const form = await request.formData()
     const file = form.get("file") as File | null

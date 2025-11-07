@@ -111,7 +111,89 @@ export function UploadForm({ editorId, editorName, editorType, onUploadSuccess }
       onProgress?: (payload: { loaded: number; total: number; percentage: number }) => void
     },
   ) => {
-    // Client will POST the file to our server endpoint which uploads to GitHub.
+    // If the file is larger than the client-side threshold, upload directly to Cloudinary
+    const CLIENT_DIRECT_UPLOAD_THRESHOLD = 5 * 1024 * 1024 // 5MB
+
+    const safeName = sanitizeFileName(fileToUpload.name)
+    const timestamp = Date.now()
+    const directory = options.isThumbnail ? "thumbnails" : "uploads"
+    const publicId = `${directory}/${editorId}/${timestamp}-${safeName}`
+
+    if (fileToUpload.size > CLIENT_DIRECT_UPLOAD_THRESHOLD) {
+      // Direct upload to Cloudinary (unsigned preset or signed via server)
+      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME
+      const unsignedPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET
+
+      if (!cloudName) {
+        throw new Error("Cloudinary not configured on client. NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME missing")
+      }
+
+      const url = `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`
+
+      return await new Promise<{ url: string; path?: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open("POST", url)
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && options.onProgress) {
+            const percentage = (event.loaded / event.total) * 100
+            options.onProgress({ loaded: event.loaded, total: event.total, percentage })
+          }
+        }
+
+        xhr.onload = async () => {
+          try {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              const json = JSON.parse(xhr.responseText)
+              resolve({ url: json.secure_url || json.url || "", path: json.public_id })
+            } else {
+              let msg = "Cloudinary upload failed"
+              try {
+                const json = JSON.parse(xhr.responseText)
+                msg = json?.error?.message || json?.error || xhr.statusText
+              } catch (e) {
+                msg = xhr.statusText || `HTTP ${xhr.status}`
+              }
+              reject(new Error(msg))
+            }
+          } catch (e) {
+            reject(e)
+          }
+        }
+
+        xhr.onerror = () => reject(new Error("Network error during Cloudinary upload"))
+        xhr.onabort = () => reject(new Error("Upload aborted"))
+
+        const form = new FormData()
+        form.append("file", fileToUpload)
+        form.append("public_id", publicId)
+
+        if (unsignedPreset) {
+          form.append("upload_preset", unsignedPreset)
+        } else {
+          // Request signature from server
+          fetch("/api/upload/sign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ public_id: publicId }),
+          })
+            .then((r) => r.json())
+            .then((sig) => {
+              if (sig?.error) return reject(new Error(sig.error))
+              form.append("api_key", sig.api_key)
+              form.append("timestamp", String(sig.timestamp))
+              form.append("signature", sig.signature)
+              xhr.send(form)
+            })
+            .catch((err) => reject(err))
+          return
+        }
+
+        xhr.send(form)
+      })
+    }
+
+    // Otherwise fall back to server-mediated upload (small files)
     const form = new FormData()
     form.append("file", fileToUpload)
     form.append(
@@ -127,7 +209,7 @@ export function UploadForm({ editorId, editorName, editorType, onUploadSuccess }
     )
 
     // Use XMLHttpRequest so we can track upload progress in browsers
-  return await new Promise<{ url: string; path?: string }>((resolve, reject) => {
+    return await new Promise<{ url: string; path?: string }>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       xhr.open("POST", "/api/upload/handle")
 

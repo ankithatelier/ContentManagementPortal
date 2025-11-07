@@ -4,12 +4,13 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertCircle, Trash2, RotateCcw } from "lucide-react"
-import { useEffect } from "react"
 
 export function ArchiveManagement() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [summary, setSummary] = useState<any | null>(null)
+  
 
   const handlePurgeOldUploads = async () => {
     // Deprecated: replaced by 'Archive uploads' which archives ALL uploads.
@@ -53,8 +54,8 @@ export function ArchiveManagement() {
       // fetch all logs to get IDs
       const logsRes = await fetch("/api/admin/logs")
       if (!logsRes.ok) throw new Error("Failed to fetch logs")
-      const logsData = await logsRes.json()
-      const ids = Array.isArray(logsData) ? logsData.map((l: any) => l.id) : []
+  const logsData = await logsRes.json()
+  const ids = Array.isArray(logsData) ? logsData.map((l: any) => l.id).filter(Boolean) : []
 
       if (ids.length === 0) {
         setSuccess("No archives to delete")
@@ -75,6 +76,50 @@ export function ArchiveManagement() {
       setIsLoading(false)
     }
   }
+
+  const handleClearCloudinary = async () => {
+    try {
+      setIsLoading(true)
+      setError(null)
+      setSuccess(null)
+      setSummary(null)
+
+      // First perform targeted deletes for known media referenced in DB
+      const res = await fetch('/api/admin/delete-cloudinary-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      })
+      let resJson: any = null
+      try { resJson = await res.json() } catch (e) { resJson = null }
+      if (!res.ok) {
+        throw new Error(resJson?.error || `delete-cloudinary failed (status ${res.status})`)
+      }
+
+      // Then clear remaining resources in Cloudinary account (destructive)
+      const clearRes = await fetch('/api/admin/clear-cloudinary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true, confirmToken: 'DELETE_ALL' }),
+      })
+      let clearJson: any = null
+      try { clearJson = await clearRes.json() } catch (e) { clearJson = null }
+      if (!clearRes.ok) {
+        // still continue to show delete-cloudinary summary if that succeeded
+        setSummary({ ...(resJson || {}), clearResults: clearJson || { error: `clear failed with status ${clearRes.status}` } })
+        throw new Error(clearJson?.error || `clear-cloudinary failed (status ${clearRes.status})`)
+      }
+
+      // show concise summary from delete-cloudinary and clear results
+      setSummary({ ...(resJson || {}), clearResults: clearJson?.results ?? clearJson })
+      setSuccess(`Cloudinary clear completed: ${resJson?.succeeded ?? 0} deleted, ${resJson?.failed ?? 0} failed`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear Cloudinary resources')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
 
   return (
     <Card className="border-red-200 bg-red-50">
@@ -114,34 +159,55 @@ export function ArchiveManagement() {
               <Button
                 variant="outline"
                 onClick={async () => {
-                  if (!confirm("Delete ALL stored files in the GitHub repo referenced by uploads/logs? This is permanent and cannot be undone.\n\nType 'yes' to confirm.")) return
-                  try {
-                    setIsLoading(true)
-                    setError(null)
-                    setSuccess(null)
-                    const res = await fetch('/api/admin/delete-github-files', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ confirm: true }),
-                    })
-                    const json = await res.json()
-                    if (!res.ok) throw new Error(json?.error || 'Failed to delete files')
-                    setSuccess(json.message || 'Deleted files from GitHub')
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Failed to delete files')
-                  } finally {
-                    setIsLoading(false)
-                  }
+                  const token = prompt("Type DELETE_ALL to permanently clear the Cloudinary container. This action is irreversible.")
+                  if (token !== "DELETE_ALL") return
+                  await handleClearCloudinary()
                 }}
                 disabled={isLoading}
                 className="gap-2"
               >
-                {isLoading ? 'Processing...' : 'Delete all stored files (GitHub)'}
+                {isLoading ? 'Processing...' : 'Clear Cloudinary container (irreversible)'}
               </Button>
             </div>
           </div>
         </div>
+        {/* Cloudinary usage display removed per request */}
+
+        {summary && (
+          <div className="mt-4 p-3 bg-gray-50 border rounded">
+            <h4 className="font-medium">Cloudinary Clear Summary</h4>
+            <p className="text-sm">Processed: {summary.processed} — Succeeded: {summary.succeeded} — Failed: {summary.failed}</p>
+            <p className="text-sm">Uploads deleted: {summary.uploadsDeletedTotal} — Logs updated: {summary.logsUpdatedTotal}</p>
+
+            {summary.succeededIds?.length > 0 && (
+              <div className="mt-2">
+                <strong className="text-sm">Deleted public_ids:</strong>
+                <ul className="list-disc list-inside text-xs max-h-40 overflow-auto">
+                  {summary.succeededIds.map((id: string) => (
+                    <li key={id} className="break-all">{id}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {summary.failedIds?.length > 0 && (
+              <div className="mt-2">
+                <strong className="text-sm text-red-600">Failed to delete:</strong>
+                <ul className="list-disc list-inside text-xs max-h-40 overflow-auto">
+                  {summary.details.filter((d: any) => !d.ok).map((d: any) => (
+                    <li key={d.id} className="break-all">
+                      <div className="font-mono text-xs">{d.id}</div>
+                      <div className="text-xs text-red-600">Image error: {d.error?.image?.message ?? 'n/a'} (status: {d.error?.image?.status ?? 'n/a'})</div>
+                      <div className="text-xs text-red-600">Video error: {d.error?.video?.message ?? 'n/a'} (status: {d.error?.video?.status ?? 'n/a'})</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   )
 }
+
