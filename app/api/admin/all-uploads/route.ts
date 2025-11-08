@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { getDb } from "@/lib/mongo-client"
+import { ObjectId } from "mongodb"
 
 export async function GET() {
   try {
@@ -8,10 +9,26 @@ export async function GET() {
     const uploads = await db.collection("uploads").find({}).sort({ created_at: -1 }).toArray()
 
     const editorIds = Array.from(new Set(uploads.map((u: any) => u.editor_id).filter(Boolean)))
-    const editors = await db.collection("editors").find({ id: { $in: editorIds } }).toArray()
+    // Editor documents store their identifier as _id in MongoDB. Convert the
+    // string ids stored on uploads back to ObjectId for lookup. If an id is not
+    // a valid ObjectId, skip it.
+    const editorObjectIds = editorIds
+      .map((id: string) => {
+        try {
+          return new ObjectId(id)
+        } catch (e) {
+          return null
+        }
+      })
+      .filter((v): v is ObjectId => v !== null)
+
+    const editors = editorObjectIds.length
+      ? await db.collection("editors").find({ _id: { $in: editorObjectIds } }).toArray()
+      : []
+
     const editorMap: Record<string, any> = {}
     editors.forEach((e: any) => {
-      editorMap[e.id] = e
+      editorMap[String(e._id)] = e
     })
 
     const mapped = uploads.map((u: any) => ({
